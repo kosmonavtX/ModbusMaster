@@ -29,7 +29,7 @@ Arduino library for communicating with Modbus slaves over RS232/485 (via RTU pro
   along with ModbusMaster.  If not, see <http://www.gnu.org/licenses/>.
   
   Written by Doc Walker (Rx)
-  Copyright © 2009-2011 Doc Walker <dfwmountaineers at gmail dot com>
+  Copyright © 2009-2013 Doc Walker <4-20ma at wvfans dot net>
   
 */
 
@@ -44,7 +44,7 @@ Set to 1 to enable debugging features within class:
   - pin 4 cycles for each byte read in the Modbus response
   - pin 5 cycles for each millisecond timeout during the Modbus response
 */
-#define __MODBUSMASTER_DEBUG__ (1)
+//#define __MODBUSMASTER_DEBUG__ (1)
 
 
 /* _____STANDARD INCLUDES____________________________________________________ */
@@ -56,31 +56,14 @@ Set to 1 to enable debugging features within class:
 #endif
 
 /* _____UTILITY MACROS_______________________________________________________ */
-/**
-@def lowWord(ww) ((uint16_t) ((ww) & 0xFFFF))
-Macro to return low word of a 32-bit integer.
-*/
-#define lowWord(ww) ((uint16_t) ((ww) & 0xFFFF))
-
-
-/**
-@def highWord(ww) ((uint16_t) ((ww) >> 16))
-Macro to return high word of a 32-bit integer.
-*/
-#define highWord(ww) ((uint16_t) ((ww) >> 16))
-
-
-
-/**
-@def LONG(hi, lo) ((uint32_t) ((hi) << 16 | (lo)))
-Macro to generate 32-bit integer from (2) 16-bit words.
-*/
-#define LONG(hi, lo) ((uint32_t) ((hi) << 16 | (lo)))
 
 
 /* _____PROJECT INCLUDES_____________________________________________________ */
 // functions to calculate Modbus Application Data Unit CRC
-#include <util/crc16.h>
+#include "util/crc16.h"
+
+// functions to manipulate words
+#include "util/word.h"
 
 
 /* _____CLASS DEFINITIONS____________________________________________________ */
@@ -96,9 +79,9 @@ class ModbusMaster
     ModbusMaster(uint8_t, uint8_t);
     
     void begin();
-    void begin(uint16_t);
+    void begin(uint16_t baud, byte config=SERIAL_8N1, uint8_t pin=0 );
     void idle(void (*)());
-    
+    void setSlave(uint8_t);
     // Modbus exception codes
     /**
     Modbus protocol illegal function exception.
@@ -225,9 +208,6 @@ class ModbusMaster
     uint8_t available(void);
     uint16_t receive(void);
     
-    void setSlave(uint8_t);
-    void setUSART(uint8_t);
-    
     
     uint8_t  readCoils(uint16_t, uint16_t);
     uint8_t  readDiscreteInputs(uint16_t, uint16_t);
@@ -260,7 +240,7 @@ class ModbusMaster
     uint16_t* rxBuffer; // from Wire.h -- need to clean this up Rx
     uint8_t _u8ResponseBufferIndex;
     uint8_t _u8ResponseBufferLength;
-    
+    uint8_t TXEnablePin; ///
     // Modbus function codes for bit access
     static const uint8_t ku8MBReadCoils                  = 0x01; ///< Modbus function 0x01 Read Coils
     static const uint8_t ku8MBReadDiscreteInputs         = 0x02; ///< Modbus function 0x02 Read Discrete Inputs
@@ -276,7 +256,7 @@ class ModbusMaster
     static const uint8_t ku8MBReadWriteMultipleRegisters = 0x17; ///< Modbus function 0x17 Read Write Multiple Registers
     
     // Modbus timeout [milliseconds]
-    static const uint8_t ku8MBResponseTimeout            = 200;  ///< Modbus timeout [milliseconds]
+    static const uint16_t ku16MBResponseTimeout          = 2000; ///< Modbus timeout [milliseconds]
     
     // master function that conducts Modbus transactions
     uint8_t ModbusMasterTransaction(uint8_t u8MBFunction);
