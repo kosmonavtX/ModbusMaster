@@ -1,7 +1,3 @@
-/**
-@file
-Arduino library for communicating with Modbus slaves over RS232/485 (via RTU protocol).
-*/
 /*
 
   ModbusMaster.cpp - Arduino library for communicating with Modbus slaves
@@ -23,7 +19,7 @@ Arduino library for communicating with Modbus slaves over RS232/485 (via RTU pro
   along with ModbusMaster.  If not, see <http://www.gnu.org/licenses/>.
   
   Written by Doc Walker (Rx)
-  Copyright © 2009-2011 Doc Walker <dfwmountaineers at gmail dot com>
+  Copyright © 2009-2013 Doc Walker <4-20ma at wvfans dot net>
   
 */
 
@@ -33,7 +29,13 @@ Arduino library for communicating with Modbus slaves over RS232/485 (via RTU pro
 
 
 /* _____GLOBAL VARIABLES_____________________________________________________ */
-HardwareSerial MBSerial = Serial; ///< Pointer to Serial class object
+#if defined(ARDUINO_ARCH_AVR)
+  HardwareSerial* MBSerial = &Serial; ///< Pointer to Serial class object
+#elif defined(ARDUINO_ARCH_SAM)
+  UARTClass* MBSerial = &Serial; ///< Pointer to Serial class object
+#else
+  #error "This library only supports boards with an AVR or SAM processor. Please open an issue at https://github.com/4-20ma/ModbusMaster/issues and indicate which processor/platform you're using."
+#endif
 
 
 /* _____PUBLIC FUNCTIONS_____________________________________________________ */
@@ -66,7 +68,11 @@ ModbusMaster::ModbusMaster(uint8_t u8MBSlave)
   _u8MBSlave = u8MBSlave;
 }
 
-
+void ModbusMaster::setSlave(uint8_t u8MBSlave)
+{
+ _u8MBSlave = u8MBSlave;
+ }
+ 
 /**
 Constructor.
 
@@ -97,15 +103,6 @@ void ModbusMaster::begin(void)
   begin(19200);
 }
 
-void ModbusMaster::setSlave(uint8_t slave)
-{
-    _u8MBSlave = slave;
-}
-
-void ModbusMaster::setUSART(uint8_t port)
-{
-    _u8SerialPort = port;
-}
 
 /**
 Initialize class object.
@@ -117,39 +114,43 @@ Call once class has been instantiated, typically within setup().
 @param u16BaudRate baud rate, in standard increments (300..115200)
 @ingroup setup
 */
-void ModbusMaster::begin(uint16_t u16BaudRate)
+void ModbusMaster::begin(uint16_t u16BaudRate,byte config, uint8_t pin)
 {
 //  txBuffer = (uint16_t*) calloc(ku8MaxBufferSize, sizeof(uint16_t));
   _u8TransmitBufferIndex = 0;
   u16TransmitBufferLength = 0;
   
+  TXEnablePin=pin;
+   if (TXEnablePin) {pinMode(TXEnablePin,OUTPUT);digitalWrite(TXEnablePin, false);}
+  
+  
   switch(_u8SerialPort)
   {
 #if defined(UBRR1H)
-    case 1:
-      MBSerial = Serial1;
-      break;
+///    case 1:
+///      MBSerial = &Serial1;
+///      break;
 #endif
       
 #if defined(UBRR2H)
     case 2:
-      MBSerial = Serial2;
+      MBSerial = &Serial2;
       break;
 #endif
       
 #if defined(UBRR3H)
     case 3:
-      MBSerial = Serial3;
+      MBSerial = &Serial3;
       break;
 #endif
       
     case 0:
     default:
-      MBSerial = Serial;
+      MBSerial = &Serial;
       break;
   }
   
-  MBSerial.begin(u16BaudRate);
+  MBSerial->begin(u16BaudRate,config); ////
 #if __MODBUSMASTER_DEBUG__
   pinMode(4, OUTPUT);
   pinMode(5, OUTPUT);
@@ -169,7 +170,7 @@ uint8_t ModbusMaster::requestFrom(uint16_t address, uint16_t quantity)
 {
   uint8_t read;
   // clamp to buffer length
-  if(quantity > ku8MaxBufferSize)
+  if (quantity > ku8MaxBufferSize)
   {
     quantity = ku8MaxBufferSize;
   }
@@ -746,40 +747,54 @@ uint8_t ModbusMaster::ModbusMasterTransaction(uint8_t u8MBFunction)
   u16CRC = 0xFFFF;
   for (i = 0; i < u8ModbusADUSize; i++)
   {
-    u16CRC = _crc16_update(u16CRC, u8ModbusADU[i]);
+    u16CRC = crc16_update(u16CRC, u8ModbusADU[i]);
   }
   u8ModbusADU[u8ModbusADUSize++] = lowByte(u16CRC);
   u8ModbusADU[u8ModbusADUSize++] = highByte(u16CRC);
   u8ModbusADU[u8ModbusADUSize] = 0;
-  
+
+  // flush receive buffer before transmitting request
+  while (MBSerial->read() != -1);
+
   // transmit request
+  
+  if (TXEnablePin) {digitalWrite(TXEnablePin, true);delay(1);}///
+  
   for (i = 0; i < u8ModbusADUSize; i++)
   {
 #if defined(ARDUINO) && ARDUINO >= 100
-    MBSerial.write(u8ModbusADU[i]);
+    MBSerial->write(u8ModbusADU[i]);
 #else
-    MBSerial.print(u8ModbusADU[i], BYTE);
+    MBSerial->print(u8ModbusADU[i], BYTE);
 #endif
+    ///Serial.println(u8ModbusADU[i], HEX); ///
   }
   
   u8ModbusADUSize = 0;
-  MBSerial.flush();
-  
+  MBSerial->flush();    // flush transmit buffer
+  //delayMicroseconds(3610);;
+   if (TXEnablePin) digitalWrite(TXEnablePin, false);
   // loop until we run out of time or bytes, or an error occurs
   u32StartTime = millis();
+  
+  
   while (u8BytesLeft && !u8MBStatus)
   {
-    if (MBSerial.available())
-    {
+    if (MBSerial->available())
+    { uint8_t ch;
 #if __MODBUSMASTER_DEBUG__
       digitalWrite(4, true);
 #endif
-      u8ModbusADU[u8ModbusADUSize++] = MBSerial.read();
+    ch =  MBSerial->read();
+    if ((ch == _u8MBSlave) || u8ModbusADUSize)
+    {u8ModbusADU[u8ModbusADUSize++] = ch;
+      /// Serial.print(ch, HEX); ///
       u8BytesLeft--;
+     }
 #if __MODBUSMASTER_DEBUG__
       digitalWrite(4, false);
 #endif
-    }
+    } //if
     else
     {
 #if __MODBUSMASTER_DEBUG__
@@ -792,17 +807,19 @@ uint8_t ModbusMaster::ModbusMasterTransaction(uint8_t u8MBFunction)
 #if __MODBUSMASTER_DEBUG__
       digitalWrite(5, false);
 #endif
-    }
+    } //else
     
     // evaluate slave ID, function code once enough bytes have been read
     if (u8ModbusADUSize == 5)
     {
+      /*
       // verify response is for correct Modbus slave
       if (u8ModbusADU[0] != _u8MBSlave)
       {
         u8MBStatus = ku8MBInvalidSlaveID;
         break;
       }
+      */
       
       // verify response is for correct Modbus function code (mask exception bit 7)
       if ((u8ModbusADU[1] & 0x7F) != u8MBFunction)
@@ -841,7 +858,7 @@ uint8_t ModbusMaster::ModbusMasterTransaction(uint8_t u8MBFunction)
           break;
       }
     }
-    if (millis() > (u32StartTime + ku8MBResponseTimeout))
+    if ((millis() - u32StartTime) > ku16MBResponseTimeout)
     {
       u8MBStatus = ku8MBResponseTimedOut;
     }
@@ -854,7 +871,7 @@ uint8_t ModbusMaster::ModbusMasterTransaction(uint8_t u8MBFunction)
     u16CRC = 0xFFFF;
     for (i = 0; i < (u8ModbusADUSize - 2); i++)
     {
-      u16CRC = _crc16_update(u16CRC, u8ModbusADU[i]);
+      u16CRC = crc16_update(u16CRC, u8ModbusADU[i]);
     }
     
     // verify CRC
